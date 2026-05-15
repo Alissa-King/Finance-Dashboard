@@ -1,0 +1,89 @@
+"""
+Seed script — populates a few funders, grants, and requirements so you can
+verify the schema and test the UI before importing real data.
+
+Usage:
+  python seed.py
+"""
+from datetime import date
+
+from src.db import get_session
+from src.models import Funder, FunderType, Grant, ReportFrequency, ReportingRequirement, Staff
+
+
+def seed():
+    with get_session() as session:
+        if session.query(Funder).count() > 0:
+            print("Database already seeded — skipping.")
+            return
+
+        # Staff
+        director = Staff(name="Finance Director", email="finance@yourorg.org", role="admin")
+        session.add(director)
+
+        # Funders
+        hrsa = Funder(name="HRSA", type=FunderType.federal, parent_agency="HHS",
+                      website="https://www.hrsa.gov", organization_id=1)
+        oha = Funder(name="Oregon Health Authority", type=FunderType.state,
+                     website="https://www.oregon.gov/oha", organization_id=1)
+        measure110 = Funder(name="Measure 110/BHRD", type=FunderType.state, organization_id=1)
+        session.add_all([hrsa, oha, measure110])
+        session.flush()
+
+        # Grants
+        ryan_white = Grant(
+            organization_id=1,
+            funder_id=hrsa.id,
+            grant_name="Ryan White Part B",
+            award_number="H89HA00001",
+            program="Ryan White Part B",
+            period_start=date(2025, 4, 1),
+            period_end=date(2026, 3, 31),
+            award_amount=500000.00,
+            program_officer_name="Jane Smith",
+            program_officer_email="jane.smith@hrsa.gov",
+        )
+        oha_grant = Grant(
+            organization_id=1,
+            funder_id=oha.id,
+            grant_name="OHA HIV Prevention",
+            period_start=date(2025, 7, 1),
+            period_end=date(2026, 6, 30),
+            award_amount=150000.00,
+        )
+        session.add_all([ryan_white, oha_grant])
+        session.flush()
+
+        # Reporting requirements
+        sf425 = ReportingRequirement(
+            funder_id=hrsa.id,
+            name="SF-425 Federal Financial Report",
+            frequency=ReportFrequency.quarterly,
+            due_offset_days=30,
+            submission_method="HRSA EHBs portal",
+            description="Federal financial report required for all HRSA grants",
+        )
+        program_report = ReportingRequirement(
+            funder_id=hrsa.id,
+            name="Ryan White Program Report",
+            frequency=ReportFrequency.annual,
+            due_offset_days=90,
+            submission_method="HRSA EHBs portal",
+        )
+        oha_financial = ReportingRequirement(
+            funder_id=oha.id,
+            name="OHA Financial Status Report",
+            frequency=ReportFrequency.semi_annual,
+            due_offset_days=30,
+            submission_method="Email to program officer",
+        )
+        session.add_all([sf425, program_report, oha_financial])
+
+        print("Seed complete:")
+        print(f"  Funders: {session.query(Funder).count()}")
+        print(f"  Grants:  {session.query(Grant).count()}")
+        print(f"  Requirements: {session.query(ReportingRequirement).count()}")
+
+
+if __name__ == "__main__":
+    seed()
