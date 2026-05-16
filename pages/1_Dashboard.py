@@ -50,10 +50,22 @@ if df.empty:
 
 df["due_date"] = pd.to_datetime(df["due_date"]).dt.date
 
-overdue = df[(df["due_date"] < today) & (~df["status"].isin(["Submitted", "Accepted", "Closed"]))]
-due_7 = df[(df["due_date"] >= today) & (df["due_date"] <= next_7) & (~df["status"].isin(["Submitted", "Accepted", "Closed"]))]
-due_30 = df[(df["due_date"] >= today) & (df["due_date"] <= next_30) & (~df["status"].isin(["Submitted", "Accepted", "Closed"]))]
+open_df = df[~df["status"].isin(["Submitted", "Accepted", "Closed"])]
+overdue = open_df[open_df["due_date"] < today]
+due_7 = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_7)]
+due_30 = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_30)]
 recent = df[df["status"].isin(["Submitted", "Accepted"])].sort_values("due_date", ascending=False).head(5)
+
+# Countdown to next deadline
+upcoming = open_df[open_df["due_date"] >= today].sort_values("due_date")
+if not upcoming.empty:
+    next_row = upcoming.iloc[0]
+    days_away = (next_row["due_date"] - today).days
+    countdown_label = "tomorrow" if days_away == 1 else ("today" if days_away == 0 else f"in {days_away} days")
+    st.info(
+        f"**Next deadline:** {next_row['requirement']} — {next_row['grant']} "
+        f"({next_row['fiscal_period']}) due **{next_row['due_date'].strftime('%b %d, %Y')}** — {countdown_label}"
+    )
 
 # Summary metrics
 col1, col2, col3, col4 = st.columns(4)
