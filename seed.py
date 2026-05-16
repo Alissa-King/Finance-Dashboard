@@ -9,6 +9,7 @@ from datetime import date
 
 from src.db import get_session
 from src.models import Funder, FunderType, Grant, ReportFrequency, ReportingRequirement, Staff
+from src.services.instance_generator import generate_deadlines
 
 
 def seed():
@@ -78,11 +79,23 @@ def seed():
             submission_method="Email to program officer",
         )
         session.add_all([sf425, program_report, oha_financial])
+        session.flush()
 
+        # Generate deadline instances for each grant/requirement pair
+        for grant, req in [
+            (ryan_white, sf425),
+            (ryan_white, program_report),
+            (oha_grant, oha_financial),
+        ]:
+            for deadline in generate_deadlines(grant, req):
+                session.add(deadline)
+
+        from src.models import Deadline
         print("Seed complete:")
         print(f"  Funders: {session.query(Funder).count()}")
         print(f"  Grants:  {session.query(Grant).count()}")
         print(f"  Requirements: {session.query(ReportingRequirement).count()}")
+        print(f"  Deadlines: {session.query(Deadline).count()}")
 
 
 if __name__ == "__main__":

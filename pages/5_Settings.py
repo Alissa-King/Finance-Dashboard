@@ -1,7 +1,7 @@
 import streamlit as st
 
 from src.db import get_session
-from src.models import Funder
+from src.models import Deadline, Funder
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
 st.title("⚙️ Settings")
@@ -32,10 +32,16 @@ st.subheader("Sample Data")
 with get_session() as _s:
     _seeded = _s.query(Funder).count() > 0
 
-if _seeded:
-    st.success("Sample data already loaded.")
+with get_session() as _s:
+    _deadline_count = _s.query(Deadline).count()
+
+if _seeded and _deadline_count > 0:
+    st.success(f"Sample data loaded ({_deadline_count} deadlines).")
 else:
-    st.warning("No data found. Load sample data to explore the dashboard.")
+    if _seeded:
+        st.warning("Funders exist but no deadlines were generated. Click below to fix that.")
+    else:
+        st.warning("No data found. Load sample data to explore the dashboard.")
     if st.button("Load sample data", type="primary"):
         from seed import seed
         try:
