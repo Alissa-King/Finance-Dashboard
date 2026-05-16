@@ -52,5 +52,20 @@ else:
         except Exception as e:
             st.error(f"Seed failed: {e}")
 
+with st.expander("🎭 Load demo data (resets all deadlines)"):
+    st.warning(
+        "This will **delete all existing deadlines** and replace them with crafted demo data "
+        "designed to show every dashboard feature: overdue items, urgent deadlines, "
+        "a ~50% compliance rate, and future planning data. Funders and grants are also replaced."
+    )
+    if st.button("Reset & load demo data", type="primary"):
+        from seed import seed_demo
+        try:
+            n = seed_demo()
+            st.success(f"Done — {n} demo deadlines loaded. Head to the Dashboard to explore!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Demo seed failed: {e}")
+
 st.divider()
 st.caption("Settings persistence coming in Phase 2 (multi-user / org config table).")
