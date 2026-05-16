@@ -2,20 +2,68 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.db import get_session
 from src.models import Deadline, DeadlineStatus, Grant, Funder, ReportingRequirement
 
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
-st.title("📊 Dashboard")
+
+st.markdown("""
+<style>
+.kpi-card {
+    background: linear-gradient(135deg, #1a2035 0%, #0f1624 100%);
+    border-radius: 12px;
+    padding: 22px 20px 18px;
+    border-left: 4px solid #4f8ef7;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    text-align: center;
+    margin-bottom: 4px;
+}
+.kpi-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #6b7a99;
+    margin-bottom: 6px;
+}
+.kpi-value {
+    font-size: 2.8rem;
+    font-weight: 900;
+    line-height: 1.1;
+    margin-bottom: 4px;
+}
+.kpi-sub {
+    font-size: 0.68rem;
+    color: #4a5568;
+}
+section-header {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #c9d1d9;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 today = date.today()
 next_7 = today + timedelta(days=7)
 next_30 = today + timedelta(days=30)
 
+STATUS_COLORS = {
+    "Not Started": "#4a5568",
+    "In Progress": "#00d4ff",
+    "Submitted":   "#4f8ef7",
+    "Accepted":    "#00e676",
+    "Closed":      "#2d9e6b",
+    "Overdue":     "#ff4757",
+}
 
-def _load_deadlines():
+
+def _load():
     with get_session() as session:
         rows = (
             session.query(Deadline, Grant, Funder, ReportingRequirement)
@@ -24,127 +72,275 @@ def _load_deadlines():
             .join(ReportingRequirement, Deadline.requirement_id == ReportingRequirement.id)
             .all()
         )
-        data = []
-        for d, g, f, r in rows:
-            data.append({
-                "id": d.id,
-                "due_date": d.due_date,
-                "status": d.status.value,
-                "funder": f.name,
-                "grant": g.grant_name,
-                "requirement": r.name,
-                "fiscal_period": d.fiscal_period_covered,
-            })
-        return pd.DataFrame(data)
+        return pd.DataFrame([{
+            "id": d.id,
+            "due_date": d.due_date,
+            "status": d.status.value,
+            "funder": f.name,
+            "grant": g.grant_name,
+            "requirement": r.name,
+            "fiscal_period": d.fiscal_period_covered or "",
+        } for d, g, f, r in rows])
 
 
 try:
-    df = _load_deadlines()
+    df = _load()
 except Exception as e:
     st.error(f"Could not connect to database: {e}")
     st.stop()
 
 if df.empty:
-    st.info("No deadlines found. Add grants and generate deadlines to get started.")
+    st.info("No deadlines found. Go to Settings to load sample data.")
     st.stop()
 
 df["due_date"] = pd.to_datetime(df["due_date"]).dt.date
 
 open_df = df[~df["status"].isin(["Submitted", "Accepted", "Closed"])]
-overdue = open_df[open_df["due_date"] < today]
-due_7 = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_7)]
-due_30 = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_30)]
-recent = df[df["status"].isin(["Submitted", "Accepted"])].sort_values("due_date", ascending=False).head(5)
+overdue    = open_df[open_df["due_date"] < today]
+due_7      = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_7)]
+due_30     = open_df[(open_df["due_date"] >= today) & (open_df["due_date"] <= next_30)]
+upcoming   = open_df[open_df["due_date"] >= today].sort_values("due_date")
+total      = len(df)
+completed  = len(df[df["status"].isin(["Submitted", "Accepted", "Closed"])])
+pct        = round(100 * completed / total) if total else 0
 
-# Countdown to next deadline
-upcoming = open_df[open_df["due_date"] >= today].sort_values("due_date")
-if not upcoming.empty:
-    next_row = upcoming.iloc[0]
-    days_away = (next_row["due_date"] - today).days
-    countdown_label = "tomorrow" if days_away == 1 else ("today" if days_away == 0 else f"in {days_away} days")
-    st.info(
-        f"**Next deadline:** {next_row['requirement']} — {next_row['grant']} "
-        f"({next_row['fiscal_period']}) due **{next_row['due_date'].strftime('%b %d, %Y')}** — {countdown_label}"
-    )
+# ── Scrolling ticker ────────────────────────────────────────────────────────
+items = []
+for _, r in overdue.iterrows():
+    items.append(f'<span style="color:#ff4757;font-weight:700">🔴 OVERDUE: {r["grant"]} — {r["requirement"]} was due {r["due_date"]}</span>')
+for _, r in due_7.iterrows():
+    d = (r["due_date"] - today).days
+    items.append(f'<span style="color:#ffb300;font-weight:600">⚠️ DUE IN {d}d: {r["grant"]} — {r["requirement"]} ({r["fiscal_period"]})</span>')
+for _, r in upcoming[~upcoming.index.isin(due_7.index)].head(12).iterrows():
+    d = (r["due_date"] - today).days
+    items.append(f'<span style="color:#00d4ff">📅 {d} days: {r["grant"]} — {r["requirement"]} ({r["fiscal_period"]})</span>')
+if not items:
+    items = ['<span style="color:#00e676">✅ All deadlines on track — great work!</span>']
 
-# Summary metrics
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("🔴 Overdue", len(overdue))
-col2.metric("⚠️ Due in 7 days", len(due_7))
-col3.metric("📅 Due in 30 days", len(due_30))
+sep = ' <span style="color:#21262d">&nbsp;◆&nbsp;</span> '
+ticker_html = (sep.join(items) + sep) * 3
 
-total = len(df)
-completed = len(df[df["status"].isin(["Submitted", "Accepted", "Closed"])])
-pct = round(100 * completed / total) if total else 0
-col4.metric("✅ Compliance %", f"{pct}%")
+components.html(f"""
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ background: transparent; overflow: hidden; }}
+.wrap {{
+  display: flex; align-items: center; height: 44px;
+  background: linear-gradient(90deg, #0d1117, #161b22, #0d1117);
+  border: 1px solid #21262d; border-radius: 8px; overflow: hidden;
+}}
+.badge {{
+  background: linear-gradient(180deg, #4f8ef7, #2563eb);
+  color: #fff; font-family: 'Courier New', monospace;
+  font-size: 10px; font-weight: 900; letter-spacing: 2.5px;
+  padding: 0 16px; height: 100%;
+  display: flex; align-items: center; flex-shrink: 0;
+  border-right: 1px solid #21262d;
+}}
+.outer {{ overflow: hidden; flex: 1; height: 100%; display: flex; align-items: center; }}
+.track {{
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font-family: 'Courier New', monospace; font-size: 12.5px;
+  animation: scroll 70s linear infinite; padding-left: 24px;
+}}
+@keyframes scroll {{
+  0%   {{ transform: translateX(0); }}
+  100% {{ transform: translateX(-33.333%); }}
+}}
+</style>
+<div class="wrap">
+  <div class="badge">LIVE&nbsp;DEADLINES</div>
+  <div class="outer"><div class="track">{ticker_html}</div></div>
+</div>
+""", height=52)
 
-st.divider()
+st.markdown("<br>", unsafe_allow_html=True)
 
-# Overdue
-if not overdue.empty:
-    st.subheader("🔴 Overdue")
-    st.dataframe(
-        overdue[["funder", "grant", "requirement", "fiscal_period", "due_date", "status"]],
-        use_container_width=True, hide_index=True,
-    )
+# ── KPI cards ───────────────────────────────────────────────────────────────
+def kpi_card(col, label, value, sub, color, glow=False):
+    shadow = f"0 0 22px {color}55, 0 4px 24px rgba(0,0,0,0.5)" if glow else "0 4px 24px rgba(0,0,0,0.5)"
+    col.markdown(f"""
+    <div class="kpi-card" style="border-left-color:{color};box-shadow:{shadow}">
+      <div class="kpi-label">{label}</div>
+      <div class="kpi-value" style="color:{color}">{value}</div>
+      <div class="kpi-sub">{sub}</div>
+    </div>""", unsafe_allow_html=True)
 
-# Due in 7 days
-if not due_7.empty:
-    st.subheader("⚠️ Due in the next 7 days")
-    st.dataframe(
-        due_7[["funder", "grant", "requirement", "fiscal_period", "due_date", "status"]],
-        use_container_width=True, hide_index=True,
-    )
+c1, c2, c3, c4 = st.columns(4)
+kpi_card(c1, "🔴 Overdue",        len(overdue),  "require immediate action",  "#ff4757", glow=len(overdue) > 0)
+kpi_card(c2, "⚠️ Due in 7 Days",  len(due_7),    "urgent attention needed",   "#ffb300", glow=len(due_7) > 0)
+kpi_card(c3, "📅 Due in 30 Days", len(due_30),   "plan and prepare now",      "#00d4ff")
+kpi_card(c4, "✅ Compliance",      f"{pct}%",     f"{completed} of {total} completed", "#00e676", glow=pct >= 80)
 
-# Due in 30 days
-st.subheader("📅 Due in the next 30 days")
-if not due_30.empty:
-    st.dataframe(
-        due_30[["funder", "grant", "requirement", "fiscal_period", "due_date", "status"]],
-        use_container_width=True, hide_index=True,
-    )
-else:
-    st.success("Nothing due in the next 30 days.")
+st.markdown("<br>", unsafe_allow_html=True)
 
-# Recently submitted
-st.subheader("✅ Recently submitted")
-if not recent.empty:
-    st.dataframe(
-        recent[["funder", "grant", "requirement", "fiscal_period", "due_date", "status"]],
-        use_container_width=True, hide_index=True,
-    )
+# ── Countdown ring + compliance gauge ───────────────────────────────────────
+col_ring, col_gauge = st.columns(2)
 
-st.divider()
+with col_ring:
+    st.markdown("##### ⏳ Next Open Deadline")
+    if not upcoming.empty:
+        nxt = upcoming.iloc[0]
+        days_left = (nxt["due_date"] - today).days
+        ring_color = "#ff4757" if days_left <= 7 else "#ffb300" if days_left <= 14 else "#00d4ff"
+        pct_ring = max(5, min(100, round(100 * days_left / 90)))
 
-# Cross-funder period view — the differentiator
-st.subheader("🗓️ Cross-funder period view")
-st.caption("See every deadline converging in a given month — the pileup view.")
-
-months = sorted(df["due_date"].apply(lambda d: d.replace(day=1)).unique())
-month_options = [m.strftime("%B %Y") for m in months]
-
-if month_options:
-    selected_month_str = st.selectbox("Select month", month_options)
-    selected_month = date(
-        int(selected_month_str.split()[-1]),
-        pd.to_datetime(selected_month_str, format="%B %Y").month,
-        1,
-    )
-    next_month = (selected_month + timedelta(days=32)).replace(day=1)
-    month_df = df[(df["due_date"] >= selected_month) & (df["due_date"] < next_month)]
-
-    if month_df.empty:
-        st.info("No deadlines in this month.")
+        fig = go.Figure(go.Pie(
+            values=[pct_ring, 100 - pct_ring],
+            hole=0.74,
+            marker=dict(colors=[ring_color, "#141929"], line=dict(width=0)),
+            textinfo="none", hoverinfo="skip",
+            direction="clockwise", sort=False,
+        ))
+        fig.update_layout(
+            showlegend=False, height=220,
+            margin=dict(t=0, b=0, l=0, r=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            annotations=[
+                dict(text=f"<b>{days_left}</b>", x=0.5, y=0.58,
+                     font=dict(size=52, color=ring_color, family="Arial Black"),
+                     showarrow=False),
+                dict(text="days left", x=0.5, y=0.38,
+                     font=dict(size=13, color="#6b7a99"), showarrow=False),
+            ],
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            f"**{nxt['requirement']}**  \n"
+            f"{nxt['grant']} &nbsp;·&nbsp; {nxt['fiscal_period']}  \n"
+            f"Due **{nxt['due_date'].strftime('%B %d, %Y')}**"
+        )
     else:
-        st.dataframe(
-            month_df[["funder", "grant", "requirement", "fiscal_period", "due_date", "status"]].sort_values("due_date"),
-            use_container_width=True, hide_index=True,
-        )
-        fig = px.timeline(
-            month_df.assign(start=month_df["due_date"], finish=month_df["due_date"]),
-            x_start="start", x_end="finish",
-            y="funder", color="funder",
-            hover_data=["grant", "requirement", "fiscal_period", "status"],
-            title=f"Deadlines in {selected_month_str}",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        st.success("No upcoming open deadlines!")
+
+with col_gauge:
+    st.markdown("##### 📊 Overall Compliance")
+    gauge_color = "#00e676" if pct >= 75 else "#ffb300" if pct >= 50 else "#ff4757"
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=pct,
+        number={"suffix": "%", "font": {"size": 56, "color": "#e0e6f0", "family": "Arial Black"}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1,
+                     "tickcolor": "#30363d", "tickfont": {"color": "#6b7a99", "size": 10}},
+            "bar": {"color": gauge_color, "thickness": 0.3},
+            "bgcolor": "#0d1117",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 50],   "color": "#1f1418"},
+                {"range": [50, 75],  "color": "#1f1e14"},
+                {"range": [75, 100], "color": "#141f18"},
+            ],
+            "threshold": {"line": {"color": "#00e676", "width": 2},
+                          "thickness": 0.8, "value": 75},
+        },
+    ))
+    fig.update_layout(
+        height=280, margin=dict(t=20, b=10, l=20, r=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#e0e6f0"},
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Status donuts by funder ─────────────────────────────────────────────────
+st.markdown("##### 📁 Status by Funder")
+funders = sorted(df["funder"].unique())
+cols = st.columns(len(funders))
+
+for col, funder in zip(cols, funders):
+    counts = df[df["funder"] == funder]["status"].value_counts()
+    fig = go.Figure(go.Pie(
+        labels=counts.index.tolist(),
+        values=counts.values.tolist(),
+        hole=0.65,
+        marker=dict(
+            colors=[STATUS_COLORS.get(s, "#4f8ef7") for s in counts.index],
+            line=dict(color="#0d1117", width=2),
+        ),
+        textinfo="none",
+        hovertemplate="%{label}: %{value}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text=f"<b>{funder}</b>", font=dict(size=11, color="#c9d1d9"), x=0.5, y=0.97),
+        showlegend=False,
+        margin=dict(t=26, b=0, l=0, r=0),
+        height=150,
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    col.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Gantt timeline ──────────────────────────────────────────────────────────
+st.markdown("##### 🗓️ Deadline Timeline")
+
+gantt = df.copy()
+gantt["x0"] = pd.to_datetime(gantt["due_date"]) - pd.Timedelta(days=1)
+gantt["x1"] = pd.to_datetime(gantt["due_date"]) + pd.Timedelta(days=1)
+gantt["hover"] = (
+    gantt["grant"] + "<br>" +
+    gantt["requirement"] + " (" + gantt["fiscal_period"] + ")<br>" +
+    "Due: " + gantt["due_date"].astype(str) + "<br>Status: " + gantt["status"]
+)
+
+fig = px.timeline(
+    gantt, x_start="x0", x_end="x1", y="funder",
+    color="status", color_discrete_map=STATUS_COLORS,
+    custom_data=["hover"],
+)
+fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
+fig.update_yaxes(autorange="reversed")
+fig.add_shape(
+    type="line",
+    x0=str(today), x1=str(today), y0=0, y1=1, yref="paper",
+    line=dict(color="#00d4ff", width=1.5, dash="dash"),
+)
+fig.add_annotation(
+    x=str(today), y=1.02, yref="paper",
+    text="Today", showarrow=False,
+    font=dict(color="#00d4ff", size=11), xanchor="left",
+)
+fig.update_layout(
+    height=320,
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0d1117",
+    font={"color": "#c9d1d9", "size": 12},
+    xaxis=dict(gridcolor="#21262d", title=""),
+    yaxis=dict(gridcolor="#21262d", title=""),
+    legend=dict(orientation="h", y=-0.22, font=dict(color="#c9d1d9"), bgcolor="rgba(0,0,0,0)"),
+    margin=dict(t=16, b=60, l=10, r=10),
+)
+st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Monthly density heat map ─────────────────────────────────────────────────
+st.markdown("##### 🔥 Monthly Deadline Density")
+
+hm = df.copy()
+hm["month"] = pd.to_datetime(hm["due_date"]).dt.to_period("M").astype(str)
+pivot = hm.pivot_table(index="funder", columns="month", values="id", aggfunc="count", fill_value=0)
+
+fig = go.Figure(go.Heatmap(
+    z=pivot.values.tolist(),
+    x=pivot.columns.tolist(),
+    y=pivot.index.tolist(),
+    colorscale=[[0, "#0d1117"], [0.25, "#162032"], [0.6, "#1668dc"], [1.0, "#00d4ff"]],
+    hovertemplate="%{y}<br>%{x}: <b>%{z}</b> deadlines<extra></extra>",
+    showscale=True,
+    colorbar=dict(tickfont=dict(color="#c9d1d9"), outlinewidth=0,
+                  title=dict(text="Count", font=dict(color="#8892a4"))),
+    text=pivot.values.tolist(),
+    texttemplate="%{text}",
+    textfont=dict(color="#c9d1d9", size=13),
+))
+fig.update_layout(
+    height=240,
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0d1117",
+    font={"color": "#c9d1d9"},
+    xaxis=dict(tickangle=-45, gridcolor="#21262d", title=""),
+    yaxis=dict(gridcolor="#21262d", title=""),
+    margin=dict(t=10, b=80, l=10, r=10),
+)
+st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
