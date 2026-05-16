@@ -43,10 +43,11 @@ else:
     else:
         st.warning("No data found. Load sample data to explore the dashboard.")
     if st.button("Load sample data", type="primary"):
-        from seed import seed
+        from seed import generate_missing_deadlines, seed
         try:
             seed()
-            st.success("Sample data loaded! Navigate to the Dashboard to explore.")
+            added = generate_missing_deadlines()
+            st.success(f"Done — {added} deadlines generated. Navigate to the Dashboard to explore.")
             st.rerun()
         except Exception as e:
             st.error(f"Seed failed: {e}")

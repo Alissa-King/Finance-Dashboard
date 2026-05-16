@@ -8,14 +8,32 @@ Usage:
 from datetime import date
 
 from src.db import get_session
-from src.models import Funder, FunderType, Grant, ReportFrequency, ReportingRequirement, Staff
+from src.models import Deadline, Funder, FunderType, Grant, ReportFrequency, ReportingRequirement, Staff
 from src.services.instance_generator import generate_deadlines
+
+
+def generate_missing_deadlines() -> int:
+    """Generate deadlines for any grant/requirement pairs that have none. Returns count added."""
+    added = 0
+    with get_session() as session:
+        grants = session.query(Grant).all()
+        requirements = session.query(ReportingRequirement).all()
+        existing = {(d.grant_id, d.requirement_id) for d in session.query(Deadline).all()}
+        for grant in grants:
+            funder_reqs = [r for r in requirements if r.funder_id == grant.funder_id]
+            for req in funder_reqs:
+                if (grant.id, req.id) not in existing:
+                    for deadline in generate_deadlines(grant, req):
+                        session.add(deadline)
+                        added += 1
+    return added
 
 
 def seed():
     with get_session() as session:
         if session.query(Funder).count() > 0:
-            print("Database already seeded — skipping.")
+            added = generate_missing_deadlines()
+            print(f"Funders already exist — generated {added} missing deadlines.")
             return
 
         # Staff
