@@ -344,3 +344,152 @@ fig.update_layout(
     margin=dict(t=10, b=80, l=10, r=10),
 )
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── 3D Views ────────────────────────────────────────────────────────────────
+st.markdown("##### 🌐 3D Interactive Views")
+st.caption("Drag to rotate · Scroll to zoom · Double-click to reset")
+
+tab_terrain, tab_space = st.tabs(["🏔️ Deadline Terrain", "🔮 Deadline Space"])
+
+with tab_terrain:
+    st.caption("Deadline density per funder per month — peaks show pileup months. Drag to spin.")
+    hm3 = df.copy()
+    hm3["month"] = pd.to_datetime(hm3["due_date"]).dt.to_period("M").astype(str)
+    pivot3 = hm3.pivot_table(index="funder", columns="month", values="id",
+                              aggfunc="count", fill_value=0)
+    funder_labels = pivot3.index.tolist()
+    month_labels  = pivot3.columns.tolist()
+    z_data = pivot3.values.tolist()
+
+    fig = go.Figure(go.Surface(
+        z=z_data,
+        x=list(range(len(month_labels))),
+        y=list(range(len(funder_labels))),
+        colorscale=[
+            [0.0, "#0d1117"], [0.2, "#0d2137"],
+            [0.5, "#1668dc"], [0.8, "#00aaff"], [1.0, "#00d4ff"],
+        ],
+        showscale=True,
+        opacity=0.92,
+        colorbar=dict(title=dict(text="Deadlines", font=dict(color="#8892a4")),
+                      tickfont=dict(color="#c9d1d9"), outlinewidth=0),
+        contours=dict(
+            z=dict(show=True, usecolormap=True, highlightcolor="#ffffff",
+                   project=dict(z=True)),
+        ),
+        hovertemplate=(
+            "Funder: <b>%{customdata}</b><br>"
+            "Month: <b>%{x}</b><br>"
+            "Deadlines: <b>%{z}</b><extra></extra>"
+        ),
+        customdata=[[funder_labels[i]] * len(month_labels) for i in range(len(funder_labels))],
+    ))
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(
+                tickvals=list(range(len(month_labels))),
+                ticktext=[m[-7:] for m in month_labels],
+                title=dict(text="Month", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a",
+                showbackground=True, tickfont=dict(color="#6b7a99", size=8),
+            ),
+            yaxis=dict(
+                tickvals=list(range(len(funder_labels))),
+                ticktext=funder_labels,
+                title=dict(text="Funder", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a",
+                showbackground=True, tickfont=dict(color="#6b7a99", size=9),
+            ),
+            zaxis=dict(
+                title=dict(text="Deadlines", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a",
+                showbackground=True, tickfont=dict(color="#6b7a99"),
+            ),
+            bgcolor="#0a0e1a",
+            camera=dict(eye=dict(x=1.6, y=-1.8, z=1.3)),
+            aspectmode="manual",
+            aspectratio=dict(x=2.0, y=1.0, z=0.6),
+        ),
+        height=540,
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#c9d1d9"),
+        margin=dict(t=10, b=10, l=10, r=10),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+with tab_space:
+    st.caption(
+        "Every deadline as a bubble in 3D space — X = days from today, Y = funder, Z = status. "
+        "Bigger bubbles = closer to due. Drag to explore."
+    )
+    status_order = list(STATUS_COLORS.keys())
+    sc = df.copy()
+    sc["due_dt"]      = pd.to_datetime(sc["due_date"])
+    sc["days"]        = (sc["due_dt"] - pd.Timestamp(today)).dt.days
+    sc["funder_idx"]  = sc["funder"].map({f: i for i, f in enumerate(sorted(sc["funder"].unique()))})
+    sc["status_idx"]  = sc["status"].map({s: i for i, s in enumerate(status_order)})
+    sc["bubble_size"] = sc["days"].abs().apply(lambda d: max(6, 28 - d * 0.08))
+    funder_names = sorted(sc["funder"].unique())
+
+    fig = go.Figure()
+    for status, color in STATUS_COLORS.items():
+        sub = sc[sc["status"] == status]
+        if sub.empty:
+            continue
+        hover = (
+            "<b>" + sub["grant"] + "</b><br>" +
+            sub["requirement"] + "<br>" +
+            sub["fiscal_period"] + "<br>" +
+            "Due: " + sub["due_date"].astype(str) + "<br>" +
+            "Status: <b>" + sub["status"] + "</b><br>" +
+            sub["days"].apply(lambda d: f"In {d} days" if d >= 0 else f"{abs(d)} days ago")
+        )
+        fig.add_trace(go.Scatter3d(
+            x=sub["days"], y=sub["funder_idx"], z=sub["status_idx"],
+            mode="markers", name=status,
+            marker=dict(size=sub["bubble_size"], color=color, opacity=0.88,
+                        line=dict(width=0.5, color="#0d1117")),
+            text=hover,
+            hovertemplate="%{text}<extra></extra>",
+        ))
+
+    fig.add_trace(go.Scatter3d(
+        x=[0, 0], y=[-0.5, len(funder_names) - 0.5], z=[0, 0],
+        mode="lines", line=dict(color="#00d4ff", width=5),
+        name="Today", hoverinfo="skip",
+    ))
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(
+                title=dict(text="Days from Today", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a", showbackground=True,
+                tickfont=dict(color="#6b7a99"),
+                zeroline=True, zerolinecolor="#00d4ff", zerolinewidth=2,
+            ),
+            yaxis=dict(
+                tickvals=list(range(len(funder_names))), ticktext=funder_names,
+                title=dict(text="Funder", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a", showbackground=True,
+                tickfont=dict(color="#6b7a99", size=9),
+            ),
+            zaxis=dict(
+                tickvals=list(range(len(status_order))), ticktext=status_order,
+                title=dict(text="Status", font=dict(color="#c9d1d9")),
+                gridcolor="#21262d", backgroundcolor="#0a0e1a", showbackground=True,
+                tickfont=dict(color="#6b7a99", size=9),
+            ),
+            bgcolor="#0a0e1a",
+            camera=dict(eye=dict(x=1.8, y=-2.0, z=1.1)),
+            aspectmode="manual",
+            aspectratio=dict(x=2.0, y=1.0, z=1.2),
+        ),
+        height=560,
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="v", x=1.0, y=0.9, font=dict(color="#c9d1d9", size=11),
+                    bgcolor="rgba(13,17,23,0.7)", bordercolor="#30363d", borderwidth=1),
+        font=dict(color="#c9d1d9"),
+        margin=dict(t=10, b=10, l=10, r=10),
+    )
+    st.plotly_chart(fig, use_container_width=True)
